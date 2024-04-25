@@ -1,0 +1,22 @@
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  generateName: cache-run-
+spec:
+  taskRef:
+    name: cache
+  params:
+    - name: key
+      value: unique-cache-key
+    - name: path
+      value: |
+        hello.txt
+        world.txt
+    - name: bucket
+      value: s3://cache-bucket
+  workspaces:
+    - name: secrets
+      secret:
+        secretName: aws-credentials
+    - name: source
+      emptyDir: {}

@@ -1,0 +1,75 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: cache-upload
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/categories: Cache
+    tekton.dev/tags: cache
+    tekton.dev/displayName: "cache upload"
+    tekton.dev/platforms: "linux/amd64"
+spec:
+  description: >-
+    This task upload caching dependencies and build outputs to S3 bucket.
+
+  workspaces:
+    - name: source
+    - name: secrets
+      optional: true
+      mountPath: /root/.aws
+  params:
+    - name: key
+      description: An explicit key for a cache entry
+      type: string
+    - name: path
+      description: A list of files, directories, and wildcard patterns to cache and restore from source workspace
+      type: string
+      default: ""
+    - name: bucket
+      description: S3 bucket to save cache files
+      type: string
+    - name: verbose
+      description: Log the commands that are executed during `cache-upload`'s operation.
+      type: string
+      default: "true"
+  steps:
+    - name: upload
+      image: docker.io/amazon/aws-cli:2.0.52
+      script: |
+        #!/usr/bin/env bash
+        set -u
+
+        if [ "$(params.verbose)" = "true" ] ; then
+          set -x
+        fi
+
+        if [ -z "$(params.path)" ]; then
+          echo "Path is empty. Skipping cache upload."
+
+          exit
+        fi
+
+        if ! aws s3 ls "$(params.bucket)" ; then
+          echo "Error: S3 bucket '$(params.bucket)' is not accessible."
+
+          exit
+        fi
+
+        # Upload the local path to S3 path
+        echo "Upload for '$(params.key)' to S3 bucket '$(params.bucket)/$(params.key)'"
+
+        # Split the path by newline
+        IFS=$'\n'
+        read -d '' -r -a paths <<< "$(params.path)"
+
+        # Upload each path to the S3 bucket
+        for path in "${paths[@]}"; do
+          if [ -d "$(workspaces.source.path)/$path" ]; then
+            aws s3 cp "$(workspaces.source.path)/$path" "$(params.bucket)/$(params.key)/$path" --recursive
+          elif [ -f "$(workspaces.source.path)/$path" ]; then
+            aws s3 cp "$(workspaces.source.path)/$path" "$(params.bucket)/$(params.key)/$path"
+          else
+            echo "Warning: '$(path)' does not exist. Skip cache upload"
+          fi
+        done

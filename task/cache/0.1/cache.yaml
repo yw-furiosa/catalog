@@ -1,0 +1,101 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: cache
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/categories: Cache
+    tekton.dev/tags: cache
+    tekton.dev/displayName: "cache"
+    tekton.dev/platforms: "linux/amd64"
+spec:
+  description: >-
+    This task allows caching dependencies and build outputs using S3 to improve workflow execution time like github cache action.
+
+  workspaces:
+    - name: source
+    - name: secrets
+      optional: true
+      mountPath: /root/.aws
+  params:
+    - name: key
+      description: An explicit key for a cache entry
+      type: string
+    - name: path
+      description: A list of files, directories, and wildcard patterns to cache and restore from source workspace
+      type: string
+      default: ""
+    - name: bucket
+      description: S3 bucket to save cache files
+      type: string
+    - name: verbose
+      description: Log the commands that are executed during `cache`'s operation
+      type: string
+      default: "true"
+  results:
+    - name: cache-hit
+      description: Cache hit flag ('true' or 'false')
+  steps:
+    - name: lookup
+      image: docker.io/amazon/aws-cli:2.0.52
+      script: |
+        #!/usr/bin/env bash
+        set -u
+
+        if [ "$(params.verbose)" = "true" ] ; then
+          set -x
+        fi
+
+        if [ -z "$(params.path)" ]; then
+          echo "Path is empty. Skipping cache download."
+
+          printf "false" > "$(results.cache-hit.path)"
+          exit
+        fi
+
+        if ! aws s3 ls "$(params.bucket)" ; then
+          echo "Error: S3 bucket '$(params.bucket)' is not accessible."
+
+          printf "false" > "$(results.cache-hit.path)"
+          exit
+        fi
+
+        # Check if the cache key exists in S3
+        if ! aws s3 ls "$(params.bucket)/$(params.key)" ; then
+          echo "Cache file for '$(params.key)' does not exist in S3 bucket '$(params.bucket)'"
+
+          printf "false" > "$(results.cache-hit.path)"
+          exit
+        fi
+
+        echo "Cache file for '$(params.key)' exists in S3 bucket '$(params.bucket)'"
+
+        # Split the path by newline
+        IFS=$'\n'
+        read -d '' -r -a paths <<< "$(params.path)"
+
+        # Download each path from the S3 bucket
+        for path in "${paths[@]}"; do
+          echo "Looking for '$path'"
+
+          if ! aws s3 ls "$(params.bucket)/$(params.key)/$path" ; then
+            echo "Warning: One of the files failed for cache hit. '$path' not found in S3 bucket. Cleanup downloaded files"
+
+            for path in "${paths[@]}"; do
+              rm -rf "$(workspaces.source.path)/$path"
+            done
+
+            printf "false" > "$(results.cache-hit.path)"
+            exit
+          fi
+
+          # If object is directory. (Depends on 'PRE ' suffix now)
+          if aws s3 ls "$(params.bucket)/$(params.key)/$path" | head | grep 'PRE ' ; then
+            aws s3 cp "$(params.bucket)/$(params.key)/$path" "$(workspaces.source.path)/$path" --recursive
+          else
+            aws s3 cp "$(params.bucket)/$(params.key)/$path" "$(workspaces.source.path)/$path"
+          fi
+        done
+
+        printf "true" > "$(results.cache-hit.path)"
