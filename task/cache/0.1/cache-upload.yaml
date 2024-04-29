@@ -56,6 +56,12 @@ spec:
           exit
         fi
 
+        # Check if the cache key already exists in S3
+        if aws s3 ls "$(params.bucket)/$(params.key)" ; then
+          echo "Cache files for '$(params.key)' already exist in S3 bucket '$(params.bucket)'. Skip upload."
+          exit
+        fi
+
         # Upload the local path to S3 path
         echo "Upload for '$(params.key)' to S3 bucket '$(params.bucket)/$(params.key)'"
 
